@@ -1,47 +1,50 @@
--- =====================================================================
--- Functional Nucleotide Database — Schema
--- =====================================================================
--- Import with:  mysql -u root -p < schema.sql
--- =====================================================================
-
 CREATE DATABASE IF NOT EXISTS nucleotide_db
   CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 USE nucleotide_db;
 
--- ---------------------------------------------------------------------
--- users : accounts that can log in to upload / edit / delete records
--- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
-  id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  username        VARCHAR(50)  NOT NULL UNIQUE,
-  email           VARCHAR(150) NOT NULL UNIQUE,
-  password_hash   VARCHAR(255) NOT NULL,
-  full_name       VARCHAR(150) NOT NULL,
-  created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+  id              INT UNSIGNED AUTO_INCREMENT,
+  username        VARCHAR(50)   NOT NULL,
+  email           VARCHAR(150)  NOT NULL,
+  password_hash   VARCHAR(255)  NOT NULL,
+  full_name       VARCHAR(150)  NOT NULL,
+  role            ENUM('researcher','admin') NOT NULL DEFAULT 'researcher',
+  created_at      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (id),
+  CONSTRAINT uq_users_username UNIQUE (username),
+  CONSTRAINT uq_users_email    UNIQUE (email),
+  CONSTRAINT chk_users_username_len CHECK (CHAR_LENGTH(username) >= 3),
+  CONSTRAINT chk_users_email_format CHECK (email LIKE '%_@_%.__%')
 ) ENGINE=InnoDB;
 
--- ---------------------------------------------------------------------
--- nucleotide_records : one row per FASTA sequence
--- ---------------------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS nucleotide_records (
-  id                 INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  accession_number   VARCHAR(64)   NOT NULL UNIQUE,
+  id                 INT UNSIGNED AUTO_INCREMENT,
+  accession_number   VARCHAR(64)   NOT NULL,
   organism           VARCHAR(150)  NOT NULL DEFAULT '',
   gene_name          VARCHAR(150)  NOT NULL DEFAULT '',
   sequence_type      ENUM('DNA','RNA') NOT NULL DEFAULT 'DNA',
   description        TEXT          NULL,
   sequence           LONGTEXT      NOT NULL,
-  sequence_length     INT UNSIGNED NOT NULL DEFAULT 0,
+  sequence_length    INT UNSIGNED  NOT NULL DEFAULT 0,
   gc_content         DECIMAL(5,2)  NOT NULL DEFAULT 0.00,
   original_filename  VARCHAR(255)  NULL,
   uploaded_by        INT UNSIGNED  NOT NULL,
   created_at         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP
                                     ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (id),
+  CONSTRAINT uq_records_accession UNIQUE (accession_number),
   CONSTRAINT fk_records_user
     FOREIGN KEY (uploaded_by) REFERENCES users(id)
-    ON DELETE RESTRICT,
+    ON DELETE RESTRICT
+    ON UPDATE CASCADE,
+  CONSTRAINT chk_records_seq_length CHECK (sequence_length >= 0),
+  CONSTRAINT chk_records_gc_range  CHECK (gc_content >= 0.00 AND gc_content <= 100.00),
+
   FULLTEXT KEY ft_organism_gene_desc (organism, gene_name, description)
 ) ENGINE=InnoDB;
 
@@ -49,50 +52,104 @@ CREATE INDEX idx_organism   ON nucleotide_records (organism);
 CREATE INDEX idx_gene_name  ON nucleotide_records (gene_name);
 CREATE INDEX idx_seq_type   ON nucleotide_records (sequence_type);
 
--- ---------------------------------------------------------------------
--- activity_log : audit trail of who changed what and when
--- ---------------------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS activity_log (
-  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  user_id      INT UNSIGNED NULL,
-  record_id    INT UNSIGNED NULL,
+  id           INT UNSIGNED AUTO_INCREMENT,
+  user_id      INT UNSIGNED  NULL,
+  record_id    INT UNSIGNED  NULL,
   action       ENUM('CREATE','UPDATE','DELETE','DOWNLOAD') NOT NULL,
-  details      VARCHAR(255) NULL,
-  created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  details      VARCHAR(255)  NULL,
+  created_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (id),
   CONSTRAINT fk_log_user
     FOREIGN KEY (user_id) REFERENCES users(id)
     ON DELETE SET NULL
+    ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
 CREATE INDEX idx_log_record ON activity_log (record_id);
 CREATE INDEX idx_log_user   ON activity_log (user_id);
 
--- ---------------------------------------------------------------------
--- Seed data (optional) — sample user: username "demo", password "demo1234"
--- Hash below is bcrypt for "demo1234"
--- ---------------------------------------------------------------------
-INSERT INTO users (username, email, password_hash, full_name)
-VALUES (
-  'demo',
-  'demo@example.com',
-  '$2y$10$p3kmmY57kUIcE1HrDbGn.etAOlMRpAvnqc6Vgr2m/LClS5SFp/g7G',
-  'Demo Researcher'
-) ON DUPLICATE KEY UPDATE username = username;
+
+CREATE TABLE IF NOT EXISTS sequence_annotations (
+  id             INT UNSIGNED AUTO_INCREMENT,
+  record_id      INT UNSIGNED  NOT NULL,
+  user_id        INT UNSIGNED  NOT NULL,
+  annotation_type ENUM('exon','intron','promoter','mutation','binding_site','other')
+                               NOT NULL DEFAULT 'other',
+  start_position INT UNSIGNED  NOT NULL,
+  end_position   INT UNSIGNED  NOT NULL,
+  strand         ENUM('+','-') NOT NULL DEFAULT '+',
+  label          VARCHAR(150)  NOT NULL,
+  notes          TEXT          NULL,
+  created_at     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (id),
+  CONSTRAINT fk_annot_record
+    FOREIGN KEY (record_id) REFERENCES nucleotide_records(id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE,
+  CONSTRAINT fk_annot_user
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE,
+  CONSTRAINT chk_annot_positions CHECK (start_position > 0 AND end_position >= start_position)
+) ENGINE=InnoDB;
+
+CREATE INDEX idx_annot_record ON sequence_annotations (record_id);
+CREATE INDEX idx_annot_user   ON sequence_annotations (user_id);
+CREATE INDEX idx_annot_type   ON sequence_annotations (annotation_type);
+
+
+INSERT INTO users (username, email, password_hash, full_name, role) VALUES
+  ('demo', 'demo@example.com', '$2y$10$p3kmmY57kUIcE1HrDbGn.etAOlMRpAvnqc6Vgr2m/LClS5SFp/g7G', 'Demo Researcher', 'researcher'),
+  ('Admin', 'admin@example.com', '$2y$10$6DlJz5rJcLffQLtErTg0dOYByBaRBi8/Qj54MqCCzjV.cHAe7tN5q', 'Admin', 'admin')
+ON DUPLICATE KEY UPDATE username = username;
+
 
 INSERT INTO nucleotide_records
-  (accession_number, organism, gene_name, sequence_type, description, sequence, sequence_length, gc_content, uploaded_by)
+  (accession_number, organism, gene_name, sequence_type, description,
+   sequence, sequence_length, gc_content, uploaded_by)
 VALUES
   ('NM_000546.6', 'Homo sapiens', 'TP53', 'DNA',
    'Tumor protein p53, partial cds excerpt used as sample seed data.',
    'ATGGAGGAGCCGCAGTCAGATCCTAGCGTCGAGCCCCCTCTGAGTCAGGAAACATTTTCAGACCTATGGAAACTACTTCCTGAAAACAACGTTCTGTCCCCCTTGCCGTCCCAAGCAATGGATGATTTGATGCTGTCCCCGGACGATATTGAACAATGGTTCACTGAAGACCCAGGTCCAGATGAAGCTCCCAGAATGCCAGAGGCTGCTCCCCCCGTGGCCCCTGCACCAGCAGCTCCTACACCGGCGGCCCCTGCACCAGCCCCCTCCTGGCCCCTGTCATCTTCTGTCCCTTCCCAGAAAACCTACCAGGGCAGCTACGGTTTCCGTCTGGGCTTCTTGCATTCTGGGACAGCCAAGTCTGTGACTTGCACGTACTCCCCTGCCCTCAACAAGATGTTTTGCCAACTGGCCAAGACCTGCCCTGTGCAGCTGTGGGTTGATTCCACACCCCCGCCCGGCACCCGCGTCCGCGCCATGGCCATCTACAAGCAGTCACAGCACATGACGGAGGTTGTGAGGCGCTGCCCCCACCATGAGCGCTGCTCAGATAGCGATGGTCTGGCCCCTCCTCAGCATCTTATCCGAGTGGAAGGAAATTTGCGTGTGGAGTATTTGGATGACAGAAACACTTTTCGACATAGTGTGGTGGTGCCCTATGAGCCGCCTGAGGTTGGCTCTGACTGTACCACCATCCACTACAACTACATGTGTAACAGTTCCTGCATGGGCGGCATGAACCGGAGGCCCATCCTCACCATCATCACACTGGAAGACTCCAGTGGTAATCTACTGGGACGGAACAGCTTTGAGGTGCGTGTTTGTGCCTGTCCTGGGAGAGACCGGCGCACAGAGGAAGAGAATCTCCGCAAGAAAGGGGAGCCTCACCACGAGCTGCCCCCAGGGAGCACTAAGCGAGCACTGCCCAACAACACCAGCTCCTCTCCCCAGCCAAAGAAGAAACCACTGGATGGAGAATATTTCACCCTTCAGATCCGTGGGCGTGAGCGCTTCGAGATGTTCCGAGAGCTGAATGAGGCCTTGGAACTCAAGGATGCCCAGGCTGGGAAGGAGCCAGGGGGGAGCAGGGCTCACTCCAGCCACCTGAAGTCCAAAAAGGGTCAGTCTACCTCCCGCCATAAAAAACTCATGTTCAAGACAGAAGGGCCTGACTCAGACTGA',
-   1182, 61.5, 1)
-ON DUPLICATE KEY UPDATE accession_number = accession_number;
+   1182, 61.50, 1),
 
-INSERT INTO nucleotide_records
-  (accession_number, organism, gene_name, sequence_type, description, sequence, sequence_length, gc_content, uploaded_by)
-VALUES
   ('NR_003286.4', 'Homo sapiens', '5S rRNA', 'RNA',
    'Human 5S ribosomal RNA, sample seed record for demo purposes.',
    'GUCUACGGCCAUACCACCCUGAACGCGCCCGAUCUCGUCUGAUCUCGGAAGCUAAGCAGGGUCGGGCCUGGUUAGUACUUGGAUGGGAGACCGCCUGGGAAUACCGGGUGCUGUAGGCUU',
-   119, 66.4, 1)
+   119, 66.39, 1),
+
+  ('NM_007294.4', 'Homo sapiens', 'BRCA1', 'DNA',
+   'Breast cancer type 1 susceptibility protein, partial coding region.',
+   'ATGGATTTATATGGAAAGAGTCTTCACAAAGCACCAAAGTCTATTTACAGTCTTCATGCTGGATCATTTGCTACTGCTTCAAATTTATTTAATGAAAGAGAGAAACTTAGCAGGAAATCAAGAAGACCAGGATAATCCTGATCCAATTCTTTAAAGAACTATTGATATTAAACACAGTAATCCTTTGTATCAAACCAATATAGATCAAGAGGCAATTCATCTTCTAACTGATGAAATGTCCATGTTTTTAATCAATAAATGTGTACATCCAATAAAGCTTCTTGCATAAATATAGAAGTCATTAAGAGTTAAATTCTTTAAAAGACTACTCAATGAAGTGAATACATCTATATAAAGACAGATACTG',
+   371, 33.42, 1),
+
+  ('NM_005228.5', 'Homo sapiens', 'EGFR', 'DNA',
+   'Epidermal growth factor receptor, exon 19 region excerpt.',
+   'AATTCGGATGCAGAGCTTCTTCCCATGATGATCTGTCCCTCACAGTGGCATCTGTGCCAGCCAGGCCCAGCCTAACTCCATCCTGGATCGGACCTTTCCGGCCGTGCAACTTTTTCCCCAAATTAAAAATGTCCCACTAATCAGAGATCTTTTCTAATGGTAATCTGGCAGTTATATAAAATAATATCAGTTTACTGATTTAAAGTATTTATGTGTCCCAAAATTTATTTTCTTAATAAAATTCCTTTAGAAAAGAT',
+   251, 38.25, 1),
+
+  ('U55762.1', 'Aequorea victoria', 'GFP', 'DNA',
+   'Green fluorescent protein (GFP) coding sequence, used as reporter gene.',
+   'ATGAGTAAAGGAGAAGAACTTTTCACTGGAGTTGTCCCAATTCTTGTTGAATTAGATGGTGATGTTAATGGGCACAAATTTTCTGTCAGTGGAGAGGGTGAAGGTGATGCAACATACGGAAAACTTACCCTTAAATTTATTTGCACTACTGGAAAACTACCTGTTCCATGGCCAACACTTGTCACTACTTTCGGTTATGGTGTTCAATGCTTTGCGAGATACCCAGATCATATGAAACAGCATGACTTTTTCAAGAGTGCCATGCCCGAAGGTTATGTACAGGAAAGAACTATATTTTTCAAAGATGACGGGAACTACAAGACACGTGCTGAAGTCAAGTTTGAAGGTGATACCCTTGTTAATAGAATCGAGTTAAAAGGTATTGATTTTAAAGAAGATGGAAACATTCTTGGACACAAATTGGAATACAACTATAACTCACACAATGTATACATCATGGCAGACAAACAAAAGAATGGAATCAAAGTTAACTTCAAAATTAGACACAACATTGAAGATGGAAGCGTTCAACTAGCAGACCATTATCAACAAAATACTCCAATTGGCGATGGCCCTGTCCTTTTACCAGACAACCATTACCTGTCCACACAATCTGCCCTTTCGAAAGATCCCAACGAAAAGAGAGACCACATGGTCCTTCTTGAGTTTGTAACAGCTGCTGGGATTACACATGGCATGGATGAACTATACAAATAA',
+   720, 40.42, 1),
+
+  ('AF206818.1', 'Arabidopsis thaliana', 'rbcL', 'DNA',
+   'Ribulose-1,5-bisphosphate carboxylase/oxygenase large subunit, partial cds.',
+   'ATGTCACCACAAACAGAGACTAAAGCAAGTGTTGGATTCAAAGCTGGTGTTAAAGATTACAAATTGACTTATTATACTCCTGACTACGAAACCAAAGATACTGATATCTTGGCAGCATTCCGAGTAACTCCTCAACCTGGAGTTCCGCCTGAAGAAGCAGGGGCCGCGGTAGCTGCCGAATCTTCTACTGGTACATGGACAACTGTGTGGACCGATGGACTTACCAGTCTTGATCGTTACAAAGGACGATGCTACCACATCGAGCCCGTTGCTGGAGAAGAAAATCAATATATTGCTTATGTAGCTTACCCCTTAGACCTTTTTGAAGAAGGTTCTGTTACTAACATGTTTACTTCCATTGTGGGTAATGTATTTGGGTTCAAAGCCCTGCGCGCTCTACGTCTGGAGGATTTGCGAATCCCTACTGCTTATACTAAAACTTTCCAAGGCCCGCCTCATGGCATCCAAGTTGAGAGAGATAAATTGAACAAGTATGGCCGTCCCCTATTGGGATGTACTATTAAACCAAAATTGGGATTATCCGCTAAGAATTACGGTAGAGCGGTTTATGAATGTCTCCGCGGTGGACTTGATTTTACCAAAGATGATGAAAACGTGAACTCCCAACCATTTATGCGTTGGAGAGATCGTTTCTTATTTTGTGCCGAAGCAATTTATAAAGCACAGGCTGAAACAGGTGAAATCAAAGGGCATTACTTGAATGCTACTGCAGGTACATGCGAAGAAATGATCAAAAGAGCTGTATTTGCTAGAGAATTGGGT',
+   762, 44.49, 1)
 ON DUPLICATE KEY UPDATE accession_number = accession_number;
+
+
+INSERT INTO activity_log (user_id, record_id, action, details) VALUES
+  (1, 1, 'CREATE',   'NM_000546.6'),
+  (1, 2, 'CREATE',   'NR_003286.4'),
+  (1, 3, 'CREATE',   'NM_007294.4'),
+  (1, 4, 'CREATE',   'NM_005228.5'),
+  (1, 5, 'CREATE',   'U55762.1'),
+  (1, 6, 'CREATE',   'AF206818.1'),
+  (1, 1, 'UPDATE',   'Updated description for TP53'),
+  (1, 1, 'DOWNLOAD', 'Downloaded NM_000546.6');

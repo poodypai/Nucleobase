@@ -60,12 +60,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
 
         logActivity($user['id'], $id, 'UPDATE', $accession);
+
+        $annotations = computeAnnotations($sequence, $sequenceType);
+        saveComputedAnnotations($id, $user['id'], $annotations);
+
         setFlash('success', 'Record "' . $accession . '" updated.');
         header('Location: view.php?id=' . $id);
         exit;
     }
 
-    // Keep edited values on screen if validation failed.
     $record = array_merge($record, [
         'accession_number' => $accession,
         'organism'         => $organism,

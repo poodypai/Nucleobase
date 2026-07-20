@@ -22,6 +22,27 @@ if (!$record) {
 }
 
 $user = currentUser();
+
+// Fetch annotations for this record
+$annotStmt = getDB()->prepare(
+    'SELECT a.*, u.username AS annotator
+     FROM sequence_annotations a
+     JOIN users u ON u.id = a.user_id
+     WHERE a.record_id = ?
+     ORDER BY a.start_position ASC'
+);
+$annotStmt->execute([$id]);
+$annotations = $annotStmt->fetchAll();
+
+$annotTypeColors = [
+    'exon'         => 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    'intron'       => 'bg-slate-50 text-slate-600 border-slate-200',
+    'promoter'     => 'bg-purple-50 text-purple-700 border-purple-200',
+    'mutation'     => 'bg-red-50 text-red-700 border-red-200',
+    'binding_site' => 'bg-amber-50 text-amber-700 border-amber-200',
+    'other'        => 'bg-blue-50 text-blue-700 border-blue-200',
+];
+
 $pageTitle = $record['accession_number'];
 require __DIR__ . '/includes/header.php';
 ?>
@@ -90,6 +111,55 @@ require __DIR__ . '/includes/header.php';
     </div>
     <pre class="bg-ink text-slate-200 rounded-lg p-4 overflow-x-auto text-sm leading-relaxed font-mono whitespace-pre-wrap break-all"><?= renderColoredSequence($record['sequence']) ?></pre>
   </div>
+</div>
+
+<!-- ============================================================= -->
+<!-- Sequence Annotations Section                                  -->
+<!-- ============================================================= -->
+<div class="mt-8">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="font-display font-semibold text-lg text-slate-800">Annotations <span class="text-slate-400 font-normal text-sm">(<?= count($annotations) ?>)</span></h2>
+  </div>
+
+  <?php if (!$annotations): ?>
+    <div class="text-center py-10 border border-dashed border-slate-300 rounded-xl text-slate-500 text-sm">
+      No annotations have been added to this sequence yet.
+    </div>
+  <?php else: ?>
+    <div class="overflow-x-auto border border-slate-200 rounded-xl shadow-sm">
+      <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
+          <tr>
+            <th class="px-4 py-3 text-left">Type</th>
+            <th class="px-4 py-3 text-left">Label</th>
+            <th class="px-4 py-3 text-left">Position</th>
+            <th class="px-4 py-3 text-left">Strand</th>
+            <th class="px-4 py-3 text-left">Notes</th>
+            <th class="px-4 py-3 text-left">By</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 bg-white">
+          <?php foreach ($annotations as $annot): ?>
+            <tr class="hover:bg-slate-50 transition">
+              <td class="px-4 py-3">
+                <span class="inline-block px-2 py-0.5 rounded border text-xs font-medium <?= $annotTypeColors[$annot['annotation_type']] ?? 'bg-slate-50 text-slate-600 border-slate-200' ?>">
+                  <?= h(str_replace('_', ' ', $annot['annotation_type'])) ?>
+                </span>
+              </td>
+              <td class="px-4 py-3 font-medium text-slate-800"><?= h($annot['label']) ?></td>
+              <td class="px-4 py-3 font-mono text-slate-600">
+                <?= number_format((int) $annot['start_position']) ?>&ndash;<?= number_format((int) $annot['end_position']) ?>
+                <span class="text-xs text-slate-400">(<?= number_format((int) $annot['end_position'] - (int) $annot['start_position'] + 1) ?> bp)</span>
+              </td>
+              <td class="px-4 py-3 font-mono text-slate-600"><?= h($annot['strand']) ?></td>
+              <td class="px-4 py-3 text-slate-600 max-w-xs truncate"><?= h($annot['notes'] ?? '') ?: '&mdash;' ?></td>
+              <td class="px-4 py-3 text-slate-500"><?= h($annot['annotator']) ?></td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  <?php endif; ?>
 </div>
 
 <?php require __DIR__ . '/includes/footer.php'; ?>

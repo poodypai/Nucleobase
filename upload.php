@@ -80,6 +80,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $newId = (int) $db->lastInsertId();
                 logActivity($user['id'], $newId, 'CREATE', $rec['accession']);
+
+                $annotations = computeAnnotations($sequence, detectSequenceType($sequence));
+                saveComputedAnnotations($newId, $user['id'], $annotations);
+
                 $imported[] = $rec['accession'];
             }
         }
